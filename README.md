@@ -1,8 +1,5 @@
 이 프로그램은 셰익스피어 작품 텍스트를 학습하여, 셰익스피어 문체와 유사한 새로운 문장을 생성하는 GPT 기반 텍스트 생성 프로그램이다
-1. 데이터 저장
-DATA_URL = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-DEFAULT_DATA_PATH = Path("input.txt")
-DEFAULT_MODEL_PATH = Path("shakespeare_gpt.pt")
+1. 데이터 저장\n
 데이터를 input.txt에, 학습한 모델을 shakespeare_gpt.pt에 저장한다. Path를 사용하면 data_path.exists() 등의 함수를 사용할 수 있다
 
 2. 데이터 확인
