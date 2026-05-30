@@ -228,21 +228,301 @@ class Block(nn.Module):
         return x
 ```
 
+`Block`은 위에서 정의한 `MultiHeadAttention`과 `FeedForward`를 합친 클래스이다
 
+self.ln1으로 input을 정규화하여 값이 너무 커지거나 작아지는 것을 방지한다
 
+self.sa로 MultiHeadAttention을 돌린다
 
+self.ln2로 input을 다르게 정규화하여 값이 너무 커지거나 작아지는 것을 방지한다
 
+self.ffwd로 FeedForward를 돌린다
 
+forward에서 x에 input을 정규화한 값을 MultiHeadAttention에 넣은 변화량을 더하여 새 x를 만든다
 
+이 방식으로 원래 정보를 유지하면서 학습이 안정적으로 진행된다
 
+새로운 x를 다시 정규화하여 FeedForward를 돌린다
 
+x에 FeedForward의 결과값인 변화량을 더하여 새 x를 만든다
 
+Block은 여러차례 반복되기에 input 형태와 output형태가 같은 것이 좋다
 
+여기에서도 input과 out의 형태가 같도록 유지된다
 
+12. Tiny GPT
 
+class TinyGPT(nn.Module):
+    def __init__(
+        self,
+        vocab_size: int,
+        block_size: int,
+        emb_dim: int = 128,
+        num_heads: int = 4,
+        num_layers: int = 4,
+        dropout: float = 0.1,
+    ):
+        super().__init__()
+        self.token_embedding = nn.Embedding(vocab_size, emb_dim)
+        self.position_embedding = nn.Embedding(block_size, emb_dim)
+        self.blocks = nn.Sequential(
+            *[Block(emb_dim, num_heads, block_size, dropout) for _ in range(num_layers)]
+        )
+        self.ln_f = nn.LayerNorm(emb_dim)
+        self.lm_head = nn.Linear(emb_dim, vocab_size)
 
+    def forward(self, x):
+        B, T = x.shape
+        pos = torch.arange(T, device=x.device)
+        tok = self.token_embedding(x)
+        pos = self.position_embedding(pos)[None]
+        h = tok + pos
+        h = self.blocks(h)
+        h = self.ln_f(h)
+        logits = self.lm_head(h)
+        return logits
 
+B, T에 batch size, block_size를 저장한다
 
+torch.arange로 각 토큰의 글자 위치를 기억하게 한다
+
+token의 값, 위치를 각각 embedding 한다
+
+위치를 embedding하면 [T, emb_dim] 형태가 되는데, tok와 더해주려 하므로 형태를 맞춰주기 위해 [None]으로 앞에 차원을 추가해 [1, T, emb_dim]의 형태로 만들어준다. 이제 broadcasting rule에 의해 계산 가능
+
+token의 값, 위치를 각각 embedding한 값을 더하여 h에 저장한다. 이때 h는 위치 정보와 값 정보를 모두 가지게 된다
+
+h를 여러 개의 Block에 통과시킨 후 정규화한다. 
+
+최종 h를 [B, T, vocab_size]으로 바꾼 logits를 반환한다
+
+이때 logits는 각 위치에서 다음 글자 후보들에 대한 점수이다
+
+13. loss 정의
+
+def sequence_cross_entropy(logits, targets):
+    return F.cross_entropy(logits.transpose(1, 2), targets)
+
+TinyGPT가 각 위치에서 예측한 다음 토큰 점수와 실제 정답 토큰을 비교해서 cross entropy loss를 계산한다
+
+F.cross_entropy는 [B, vocab_size, T] 형태의 input이 필요하므로 logits 형태의 indes 1, 2의 위치를 바꿔준다
+
+14. 훈련
+
+def train_one_epoch(model, loader, optimizer, max_steps=None):
+    model.train()
+    total_loss, total_count = 0.0, 0
+    for step, (xb, yb) in enumerate(loader):
+        logits = model(xb)
+        loss = sequence_cross_entropy(logits, yb)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item() * xb.size(0)
+        total_count += xb.size(0)
+        if max_steps is not None and step + 1 >= max_steps:
+            break
+    return total_loss / total_count
+
+1 epoch만큼 훈련하는 함수. 추가로 학습하려면 max_steps를 늘리면 된다
+
+model.train()은 dropout을 활성화 시킨다
+
+total_loss, total_count에 전체 loss 합, 처리한 데이터 개수를 저장하기 위해 각각 0.0, 0을 설정한다
+
+데이터 loader는 데이터셋에서 각각 batch_size개의 x, y를 꺼내 각각 xb, yb에 저장한다
+
+xb를 모델에 넣으면 모델은 다음 문자에 대한 후보점수를 계산해 logits에 저장한다
+
+logits에 저장된 예측과 정답 yb를 비교하여 loss를 계산한다
+
+grad를 0으로 만들어주고, loss를 바탕으로 grad를 역으로 다시 계산한 후, 파라미터들을 grad에 따라 수정해준다 (token_embedding, position_embedding, key/query/value, feedforward linear layer, lm_head 등)
+
+F.cross_entropy는 평균 loss 값을 계산하므로, loss.item으로 loss를 일반 숫자 형태로 만들어준 후 xb.size(0)=batch_size를 곱해 전체 loss 값을 계산하여 total_loss에 누적한다
+
+batch를 계산한 수만큼 xb.size(0)=batch_size를 더해 처리한 데이터 개수를 저장한다
+
+한번 할때마다 step에 1을 더하고 step이 max_step에 도달하면 멈춘다
+
+total_loss를 total_count로 나누어 평균 loss를 반환한다
+
+15. 생성
+
+@torch.no_grad()
+def sample_gpt(model, block_size, stoi, itos, start_text="ROMEO:", max_new_tokens=400):
+    model.eval()
+    context = torch.zeros((1, block_size), dtype=torch.long)
+    for ch in start_text:
+        if ch in stoi:
+            ix = torch.tensor([[stoi[ch]]])
+            context = torch.cat([context[:, 1:], ix], dim=1)
+    out = list(start_text)
+    for _ in range(max_new_tokens):
+        logits = model(context)
+        logits = logits[:, -1, :]
+        probs = F.softmax(logits, dim=-1)
+        ix = torch.multinomial(probs, num_samples=1)
+        out.append(itos[ix.item()])
+        context = torch.cat([context[:, 1:], ix], dim=1)
+    return "".join(out)
+
+이 단계는 실제 결과를 생성하는 단계이므로 @torch.no_grad()로 grad를 계산하지 않겠다고 표현한다
+
+model.eval()으로 dropout를 제거한다
+
+context는 모델에 넣은 입력값. (1,block_size) 형태의 0으로 이루어진 행렬로 시작한다
+
+start_text의 모든 글자에 대하여 stoi에 있으면 차례로 숫자로 바꿔 context 뒤쪽에 추가하고 context 앞쪽은 버리는 작업을 해준다
+
+그리고 출력값이 저장될 out 리스트에 start_text를 먼저 넣어준다
+
+max_new_tokens번 만큼 model에 context를 넣고 context의 다음 글자의 후보점수를 예측한 것을 확률 형태로 바꾸어 확률에 따라 임의로 추출하여 일반 숫자 형태로 바꾼 후 글자로 바꾸어 out에 추가하고 context를 한깐 옆으로 밀는 작업을 반복한다. 
+
+logits는 model을 거쳤을 때 [1, block_size, vocab_size] 형태이지만 마지막의 예측치만이 다음 글자의 후보점수이므로 마지막 예측치만 가져와 [1, vocab_size] 형태로 바꿔준다
+
+최종적으로 리스트 안의 글자들을 모두 합쳐 출력물을 반환한다
+
+16. 모델 저장
+
+def save_model(path, model, config, stoi, itos):
+    torch.save(
+        {
+            "model_state": model.state_dict(),
+            "config": config,
+            "stoi": stoi,
+            "itos": itos,
+        },
+        path,
+    )
+
+학습한 모델을 나중에 사용할 수 있게 저장 
+
+torch.save로 path에 모델 관련 정보를 저장. model.state_dict()은 모델이 학습한 숫자값들(가중치, bias), config는 vocab_size, block_size 등 모델 설정 값
+
+17. 모델 불러오기
+
+def load_model(path):
+    payload = torch.load(path, map_location="cpu")
+    config = payload["config"]
+    model = TinyGPT(**config)
+    model.load_state_dict(payload["model_state"])
+    model.eval()
+    return model, payload["stoi"], payload["itos"], config
+
+payload에 앞에서 path에 저장한 정보들을 불러와 model, stoi, itos, config를 다시 만든다
+
+**config는 config에 저장된 vocab_size: 65 등을   vocab_size= 65로 만든다. 이것을 TinyGPT에 넣어 모델의 틀을 재구성
+
+model.state_dict()에 저장된 가중치들을 모델에 넣어 학습된 모델로 바꿔준다
+
+model.eval()로 dropout을 꺼준다
+
+17. 옵션 저장
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train or generate TinyGPT on Shakespeare (CPU only).")
+    parser.add_argument("--data_path", default=str(DEFAULT_DATA_PATH))
+    parser.add_argument("--model_path", default=str(DEFAULT_MODEL_PATH))
+    parser.add_argument("--train", action="store_true")
+    parser.add_argument("--generate", action="store_true")
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--block_size", type=int, default=64)
+    parser.add_argument("--emb_dim", type=int, default=128)
+    parser.add_argument("--num_heads", type=int, default=4)
+    parser.add_argument("--num_layers", type=int, default=4)
+    parser.add_argument("--dropout", type=float, default=0.1)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--max_steps", type=int, default=300)
+    parser.add_argument("--start_text", default="ROMEO:")
+    parser.add_argument("--max_new_tokens", type=int, default=400)
+    return parser.parse_args()
+
+터미널에서 사용할 옵션과 디폴트값 정리
+
+18. 프로그램 실행 
+
+def main():
+    args = parse_args()
+    data_path = Path(args.data_path)
+    model_path = Path(args.model_path)
+
+    do_train = args.train
+    do_generate = args.generate
+    if not do_train and not do_generate:
+        if model_path.exists():
+            do_generate = True
+        else:
+            do_train = True
+            do_generate = True
+
+    if do_train:
+        text = load_text(data_path)
+        if args.resume and model_path.exists():
+            model, stoi, itos, config = load_model(model_path)
+            block_size = config["block_size"]
+            data = encode(text, stoi)
+            dataset = NextTokenDataset(data, block_size)
+            loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+        else:
+            stoi, itos, vocab_size = build_vocab(text)
+            data = encode(text, stoi)
+            dataset = NextTokenDataset(data, args.block_size)
+            loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
+            config = {
+                "vocab_size": vocab_size,
+                "block_size": args.block_size,
+                "emb_dim": args.emb_dim,
+                "num_heads": args.num_heads,
+                "num_layers": args.num_layers,
+                "dropout": args.dropout,
+            }
+            model = TinyGPT(**config)
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+
+        for epoch in range(args.epochs):
+            train_loss = train_one_epoch(model, loader, optimizer, max_steps=args.max_steps)
+            print(f"epoch {epoch:2d} | train loss {train_loss:.4f}")
+
+        save_model(model_path, model, config, stoi, itos)
+        print(f"saved model to {model_path}")
+
+    if do_generate:
+        if not model_path.exists():
+            raise FileNotFoundError(f"model not found: {model_path}")
+        model, stoi, itos, config = load_model(model_path)
+        block_size = config["block_size"]
+        text = sample_gpt(
+            model,
+            block_size,
+            stoi,
+            itos,
+            start_text=args.start_text,
+            max_new_tokens=args.max_new_tokens,
+        )
+        print(text)
+
+args = parse_args()으로 터미널에 입력된 옵션을 읽고 그에 맞춰 실행 
+
+Path로 데이터와 모델 경로 설정
+
+사용자의 옵션에 따라 훈련/생성 실행. 옵션이 없을 경우 모델이 있으면 생성, 없으면 학습 후 생성
+
+훈련할 경우 먼저 데이터 불러오기
+
+모델이 존재하고 이어서 학습하는 경우 모델을 불러와 기존의 block_size, stoi를 사용한다
+
+데이터를 stoi로 숫자로 변환하고 새로 데이터셋과 데이터로더를 만들어 학습
+
+새로 학습하는 경우 처음부터 새로 제작
+
+지정한 epoch 수만큼 train_one_epoch을 사용하여 학습하고 epoch과 loss 출력, 모델 저장
+
+생성하는 경우 모델 파일 없으면 오류, 있으면 모델을 불러오기
+
+학습된 모델로 텍스트 생성, 출력
 
 
 
