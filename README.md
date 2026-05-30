@@ -1,21 +1,22 @@
 이 프로그램은 셰익스피어 작품 텍스트를 학습하여, 셰익스피어 문체와 유사한 새로운 문장을 생성하는 GPT 기반 텍스트 생성 프로그램이다
-1. 데이터 저장\n
+1. 데이터 저장
+
 데이터를 input.txt에, 학습한 모델을 shakespeare_gpt.pt에 저장한다. Path를 사용하면 data_path.exists() 등의 함수를 사용할 수 있다
 
-2. 데이터 확인
+3. 데이터 확인
 def ensure_data(data_path: Path) -> None:
     if not data_path.exists():
         data_path.parent.mkdir(parents=True, exist_ok=True)
         urllib.request.urlretrieve(DATA_URL, data_path)
 데이터가 data_path에 저장되어있는지 확인하고, 없으면 데이터를 저장할 경로를 생성한 후 DATA_URL에서 데이터를 다운로드 받아 data_path 위치에 저장한다.
 
-3. 데이터 읽기 
+4. 데이터 읽기 
 def load_text(data_path: Path) -> str:
     ensure_data(data_path)
     return data_path.read_text(encoding="utf-8")
 2의 ensure_data를 사용해 data_path에 데이터를 확실히 저장하고 read_text로 input.txt의 전체 데이터를 반환한다
 
-4. chars, stoi, itos 정의
+5. chars, stoi, itos 정의
 def build_vocab(text: str):
     chars = sorted(list(set(text)))
     stoi = {ch: i for i, ch in enumerate(chars)}
@@ -23,12 +24,12 @@ def build_vocab(text: str):
     return stoi, itos, len(chars)
 input.txt 안의 글자 종류를 정렬하여 chars에 저장하고 그 길이를 반환하여 글자 종류 개수를 확인한다. stoi는 특정 문자를 특정 숫자로, itos는 특정 숫자를 특정 문자로 저장한다
 
-5. 텍스트를 숫자로 변환
+6. 텍스트를 숫자로 변환
  def encode(text: str, stoi) -> torch.Tensor:
     return torch.tensor([stoi[ch] for ch in text], dtype=torch.long)
 text 안의 모든 글자를 숫자로 변환하여 정수 tensor 타입으로 반환한다
 
-6. 데이터셋 만들기
+7. 데이터셋 만들기
 class NextTokenDataset(Dataset):
     def __init__(self, data: torch.Tensor, block_size: int):
         self.data = data
@@ -45,7 +46,7 @@ init에서 data, block_size를 받아 저장한다
 len에서 전체 데이터셋의 길이를 반환한다
 getitem에서 idx에 맞게 x에 blocksize 길이의 문제를, y에 x를 한칸 옆으로 옮긴 blocksize 길이의 정답을 저장해 반환한다
 
-7. 단일 head attention 정의
+8. 단일 head attention 정의
 class Head(nn.Module):
     def __init__(self, emb_dim: int, head_size: int, block_size: int, dropout: float = 0.1):
         super().__init__()
